@@ -8,6 +8,8 @@ import 'services/audio_handler.dart';
 
 late MyAudioHandler audioHandler;
 
+enum SortType { name, added }
+
 Future<void> main() async {
   audioHandler = await AudioService.init(
     builder: () => MyAudioHandler(),
@@ -28,11 +30,10 @@ class MyApp extends StatelessWidget {
       title: 'Aura Music',
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0F172A), // 深いネイビー
-        primaryColor: const Color(0xFF38BDF8), // シアン
+        scaffoldBackgroundColor: const Color(0xFF0F172A),
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF38BDF8),
-          secondary: Color(0xFF818CF8), // パープル
+          secondary: Color(0xFF818CF8),
           surface: Color(0xFF1E293B),
         ),
         appBarTheme: const AppBarTheme(
@@ -61,6 +62,10 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> {
   final List<Track> _tracks = [];
+  
+  bool isShuffleEnabled = false;
+  AudioServiceRepeatMode repeatMode = AudioServiceRepeatMode.none;
+  SortType sortType = SortType.name;
 
   @override
   void initState() {
@@ -98,12 +103,25 @@ class _PlayerPageState extends State<PlayerPage> {
         }
       }
     }
-    // 名前順でソート
-    loadedTracks.sort((a, b) => a.title.compareTo(b.title));
 
     setState(() {
       _tracks.clear();
       _tracks.addAll(loadedTracks);
+      _sortTracks();
+    });
+  }
+
+  void _sortTracks() {
+    setState(() {
+      if (sortType == SortType.name) {
+        _tracks.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      } else if (sortType == SortType.added) {
+        _tracks.sort((a, b) {
+          final aMod = a.file.statSync().modified;
+          final bMod = b.file.statSync().modified;
+          return bMod.compareTo(aMod);
+        });
+      }
     });
   }
 
@@ -125,7 +143,7 @@ class _PlayerPageState extends State<PlayerPage> {
       await src.copy(dest.path);
       _tracks.add(Track(title: f.name, file: dest));
     }
-    setState(() {});
+    _sortTracks();
   }
 
   @override
@@ -134,16 +152,71 @@ class _PlayerPageState extends State<PlayerPage> {
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('AURA MUSIC'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(50),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    Icons.shuffle,
+                    color: isShuffleEnabled ? const Color(0xFF38BDF8) : Colors.grey,
+                  ),
+                  onPressed: () {
+                    setState(() => isShuffleEnabled = !isShuffleEnabled);
+                    audioHandler.setShuffleMode(
+                      isShuffleEnabled ? AudioServiceShuffleMode.all : AudioServiceShuffleMode.none
+                    );
+                  },
+                ),
+                IconButton(
+                  icon: Icon(
+                    repeatMode == AudioServiceRepeatMode.none
+                        ? Icons.repeat
+                        : repeatMode == AudioServiceRepeatMode.all
+                            ? Icons.repeat_on
+                            : Icons.repeat_one_on,
+                    color: repeatMode != AudioServiceRepeatMode.none ? const Color(0xFF38BDF8) : Colors.grey,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      if (repeatMode == AudioServiceRepeatMode.none) {
+                        repeatMode = AudioServiceRepeatMode.all;
+                      } else if (repeatMode == AudioServiceRepeatMode.all) {
+                        repeatMode = AudioServiceRepeatMode.one;
+                      } else {
+                        repeatMode = AudioServiceRepeatMode.none;
+                      }
+                    });
+                    audioHandler.setRepeatMode(repeatMode);
+                  },
+                ),
+                PopupMenuButton<SortType>(
+                  icon: const Icon(Icons.sort, color: Colors.grey),
+                  onSelected: (type) {
+                    setState(() {
+                      sortType = type;
+                      _sortTracks();
+                    });
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(value: SortType.name, child: Text('曲名順 (A-Z)')),
+                    const PopupMenuItem(value: SortType.added, child: Text('追加日順 (新しい順)')),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF0F172A), 
-              Color(0xFF020617), // ほぼ黒
-            ],
+            colors: [Color(0xFF0F172A), Color(0xFF020617)],
           ),
         ),
         child: StreamBuilder<MediaItem?>(
@@ -152,7 +225,7 @@ class _PlayerPageState extends State<PlayerPage> {
             final currentMediaItem = mediaItemSnapshot.data;
             
             return ListView.builder(
-              padding: const EdgeInsets.only(top: 100, bottom: 140, left: 16, right: 16),
+              padding: const EdgeInsets.only(top: 120, bottom: 140, left: 16, right: 16),
               itemCount: _tracks.length,
               itemBuilder: (_, i) {
                 final track = _tracks[i];
@@ -182,8 +255,6 @@ class _PlayerPageState extends State<PlayerPage> {
                       height: 56,
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
                           colors: isPlaying 
                             ? [const Color(0xFF38BDF8), const Color(0xFF818CF8)]
                             : [Colors.grey[800]!, Colors.grey[900]!],
@@ -219,7 +290,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         ),
                       ),
                     ),
-                    onTap: () => audioHandler.loadFile(track.file.path, track.title),
+                    onTap: () => audioHandler.loadPlaylist(_tracks, i),
                   ),
                 );
               },
@@ -269,11 +340,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     color: const Color(0xFF1E293B).withOpacity(0.95),
                     borderRadius: BorderRadius.circular(24),
                     boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.6),
-                        blurRadius: 30,
-                        offset: const Offset(0, 10),
-                      )
+                      BoxShadow(color: Colors.black.withOpacity(0.6), blurRadius: 30, offset: const Offset(0, 10))
                     ],
                     border: Border.all(color: Colors.white.withOpacity(0.1)),
                   ),
@@ -284,9 +351,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF38BDF8), Color(0xFF818CF8)],
-                          ),
+                          gradient: const LinearGradient(colors: [Color(0xFF38BDF8), Color(0xFF818CF8)]),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: const Icon(Icons.music_note, color: Colors.white),
@@ -301,17 +366,10 @@ class _PlayerPageState extends State<PlayerPage> {
                               currentItem.title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white, 
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                              ),
+                              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 4),
-                            const Text(
-                              'TAP TO EXPAND', 
-                              style: TextStyle(color: Colors.grey, fontSize: 10, letterSpacing: 1.0),
-                            ),
+                            const Text('TAP TO EXPAND', style: TextStyle(color: Colors.grey, fontSize: 10, letterSpacing: 1.0)),
                           ],
                         ),
                       ),
@@ -367,154 +425,123 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF1E293B),
-              Color(0xFF0F172A),
-              Color(0xFF020617),
-            ],
+            colors: [Color(0xFF1E293B), Color(0xFF0F172A), Color(0xFF020617)],
           ),
         ),
         child: SafeArea(
-          child: StreamBuilder<PlaybackState>(
-            stream: audioHandler.playbackState,
-            builder: (context, stateSnapshot) {
-              final playbackState = stateSnapshot.data;
-              final isPlaying = playbackState?.playing ?? false;
-              final position = playbackState?.updatePosition ?? Duration.zero;
+          child: StreamBuilder<MediaItem?>(
+            stream: audioHandler.mediaItem,
+            builder: (context, mediaItemSnapshot) {
+              final currentItem = mediaItemSnapshot.data;
+              if (currentItem == null) return const SizedBox.shrink();
               
-              return StreamBuilder<MediaItem?>(
-                stream: audioHandler.mediaItem,
-                builder: (context, mediaItemSnapshot) {
-                  final currentItem = mediaItemSnapshot.data;
-                  if (currentItem == null) return const SizedBox.shrink();
-                  
-                  final duration = currentItem.duration ?? Duration.zero;
-                  final maxMillis = duration.inMilliseconds.toDouble();
-                  final currentMillis = position.inMilliseconds.toDouble();
-                  final safeValue = currentMillis > maxMillis ? maxMillis : currentMillis;
+              final duration = currentItem.duration ?? Duration.zero;
+              final maxMillis = duration.inMilliseconds.toDouble();
 
-                  return Column(
-                    children: [
-                      const Spacer(flex: 1),
-                      // アルバムアート
-                      Container(
-                        width: 280,
-                        height: 280,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFF38BDF8), Color(0xFF818CF8)],
-                          ),
-                          borderRadius: BorderRadius.circular(32),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF38BDF8).withOpacity(0.3),
-                              blurRadius: 50,
-                              offset: const Offset(0, 20),
-                            )
-                          ],
-                        ),
-                        child: const Center(
-                          child: Icon(Icons.music_note, size: 120, color: Colors.white),
-                        ),
+              return Column(
+                children: [
+                  const Spacer(flex: 1),
+                  Container(
+                    width: 280,
+                    height: 280,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF38BDF8), Color(0xFF818CF8)],
                       ),
-                      const Spacer(flex: 1),
-                      
-                      // 曲名とアーティスト名
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 32),
-                        child: Column(
-                          children: [
-                            Text(
-                              currentItem.title,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: 0.5,
-                                height: 1.2,
+                      borderRadius: BorderRadius.circular(32),
+                      boxShadow: [
+                        BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.3), blurRadius: 50, offset: const Offset(0, 20))
+                      ],
+                    ),
+                    child: const Center(child: Icon(Icons.music_note, size: 120, color: Colors.white)),
+                  ),
+                  const Spacer(flex: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Column(
+                      children: [
+                        Text(
+                          currentItem.title,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5, height: 1.2),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text('LOCAL FILE', style: TextStyle(fontSize: 14, color: Color(0xFF38BDF8), letterSpacing: 2.0, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                  const Spacer(flex: 1),
+                  
+                  // 💡ここから位置情報をリアルタイム取得
+                  StreamBuilder<Duration>(
+                    stream: audioHandler.positionStream,
+                    builder: (context, snapshot) {
+                      final position = snapshot.data ?? Duration.zero;
+                      final currentMillis = position.inMilliseconds.toDouble();
+                      final safeValue = currentMillis > maxMillis ? maxMillis : currentMillis;
+
+                      return Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+                                activeTrackColor: const Color(0xFF38BDF8),
+                                inactiveTrackColor: Colors.white.withOpacity(0.1),
+                                thumbColor: Colors.white,
+                                overlayColor: const Color(0xFF38BDF8).withOpacity(0.2),
+                              ),
+                              child: Slider(
+                                value: safeValue,
+                                max: maxMillis > 0 ? maxMillis : 1.0,
+                                onChanged: (value) {
+                                  audioHandler.seek(Duration(milliseconds: value.toInt()));
+                                },
                               ),
                             ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'LOCAL FILE',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFF38BDF8),
-                                letterSpacing: 2.0,
-                                fontWeight: FontWeight.bold,
-                              ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 32),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(_formatDuration(position), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                                Text(_formatDuration(duration), style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
-                      const Spacer(flex: 1),
-                      
-                      // シークバー
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
-                            activeTrackColor: const Color(0xFF38BDF8),
-                            inactiveTrackColor: Colors.white.withOpacity(0.1),
-                            thumbColor: Colors.white,
-                            overlayColor: const Color(0xFF38BDF8).withOpacity(0.2),
                           ),
-                          child: Slider(
-                            value: safeValue,
-                            max: maxMillis > 0 ? maxMillis : 1.0,
-                            onChanged: (value) {
-                              audioHandler.seek(Duration(milliseconds: value.toInt()));
-                            },
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 32),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(_formatDuration(position), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                            Text(_formatDuration(duration), style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      const Spacer(flex: 1),
-                      
-                      // 操作ボタン
-                      Row(
+                        ],
+                      );
+                    }
+                  ),
+                  const Spacer(flex: 1),
+                  StreamBuilder<PlaybackState>(
+                    stream: audioHandler.playbackState,
+                    builder: (context, stateSnapshot) {
+                      final isPlaying = stateSnapshot.data?.playing ?? false;
+                      return Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           IconButton(
                             icon: const Icon(Icons.skip_previous_rounded, color: Colors.white, size: 48),
-                            onPressed: () {}, // 未実装
+                            onPressed: () => audioHandler.skipToPrevious(),
                           ),
                           const SizedBox(width: 32),
                           Container(
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: Colors.white,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.white.withOpacity(0.2),
-                                  blurRadius: 20,
-                                  spreadRadius: 2,
-                                )
-                              ]
+                              boxShadow: [BoxShadow(color: Colors.white.withOpacity(0.2), blurRadius: 20, spreadRadius: 2)]
                             ),
                             child: IconButton(
-                              icon: Icon(
-                                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                color: const Color(0xFF0F172A),
-                                size: 52,
-                              ),
+                              icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: const Color(0xFF0F172A), size: 52),
                               onPressed: () {
                                 if (isPlaying) {
                                   audioHandler.pause();
@@ -527,14 +554,14 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                           const SizedBox(width: 32),
                           IconButton(
                             icon: const Icon(Icons.skip_next_rounded, color: Colors.white, size: 48),
-                            onPressed: () {}, // 未実装
+                            onPressed: () => audioHandler.skipToNext(),
                           ),
                         ],
-                      ),
-                      const Spacer(flex: 2),
-                    ],
-                  );
-                }
+                      );
+                    }
+                  ),
+                  const Spacer(flex: 2),
+                ],
               );
             }
           ),

@@ -1,14 +1,17 @@
 ﻿import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
+import '../models/track.dart';
 
-class MyAudioHandler extends BaseAudioHandler {
+class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final _player = AudioPlayer(
-    // iOSの通知センター制御との干渉を避けるため、オフロードは無効のまま
     androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
       audioOffloadMode: AndroidAudioOffloadMode.disabled,
     ),
   );
+
+  // 💡追加：UI側でリアルタイムの位置を取得するためのストリーム
+  Stream<Duration> get positionStream => _player.positionStream;
 
   MyAudioHandler() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
@@ -17,10 +20,19 @@ class MyAudioHandler extends BaseAudioHandler {
 
   Future<void> _initSession() async {
     final session = await AudioSession.instance;
-    // iOSでバックグラウンド再生を許可する設定
     await session.configure(const AudioSessionConfiguration.music());
-    // セッションをアクティブにする
     await session.setActive(true);
+
+    // Bluetooth接続時の自動再生
+    session.devicesChangedStream.listen((event) {
+      final hasBluetoothAdded = event.devicesAdded.any((d) => d.isBluetooth);
+      if (hasBluetoothAdded) {
+        if (_player.processingState == ProcessingState.ready || 
+            _player.processingState == ProcessingState.completed) {
+          play();
+        }
+      }
+    });
   }
 
   PlaybackState _transformEvent(PlaybackEvent event) {
@@ -59,18 +71,53 @@ class MyAudioHandler extends BaseAudioHandler {
     await super.stop();
   }
 
-  Future<void> loadFile(String path, String title) async {
+  @override
+  Future<void> skipToNext() => _player.seekToNext();
+  @override
+  Future<void> skipToPrevious() => _player.seekToPrevious();
+
+  @override
+  Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
+    final enabled = shuffleMode == AudioServiceShuffleMode.all;
+    await _player.setShuffleModeEnabled(enabled);
+  }
+
+  @override
+  Future<void> setRepeatMode(AudioServiceRepeatMode repeatMode) async {
+    switch (repeatMode) {
+      case AudioServiceRepeatMode.none:
+        await _player.setLoopMode(LoopMode.off);
+        break;
+      case AudioServiceRepeatMode.one:
+        await _player.setLoopMode(LoopMode.one);
+        break;
+      case AudioServiceRepeatMode.all:
+      case AudioServiceRepeatMode.group:
+        await _player.setLoopMode(LoopMode.all);
+        break;
+    }
+  }
+
+  Future<void> loadPlaylist(List<Track> tracks, int initialIndex) async {
     try {
-      // 再生前にセッションがアクティブであることを再確認
       final session = await AudioSession.instance;
       await session.setActive(true);
 
-      await _player.stop();
-      final duration = await _player.setFilePath(path);
-      mediaItem.add(MediaItem(id: path, title: title, duration: duration));
+      final mediaItems = tracks.map((t) => MediaItem(id: t.file.path, title: t.title)).toList();
+      queue.add(mediaItems);
+
+      final audioSources = tracks
+          .map((t) => AudioSource.file(t.file.path, tag: mediaItems[tracks.indexOf(t)]))
+          .toList();
+
+      await _player.setAudioSource(
+        ConcatenatingAudioSource(children: audioSources),
+        initialIndex: initialIndex,
+        initialPosition: Duration.zero,
+      );
       await _player.play();
     } catch (e) {
-      print("Error loading file: $e");
+      print("Error loading playlist: $e");
     }
   }
 }
