@@ -38,37 +38,45 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
-    _loadSavedTracks(); // 起動時に保存済みの曲を読み込む
+    _loadSavedTracks();
   }
 
-  // アプリ内のMediaフォルダから曲を読み込む
   Future<void> _loadSavedTracks() async {
     final docs = await getApplicationDocumentsDirectory();
-    final mediaDir = Directory('${docs.path}/Media');
+    final dirsToScan = [
+      Directory(docs.path),
+      Directory('${docs.path}/Media'),
+    ];
 
-    if (await mediaDir.exists()) {
-      final files = mediaDir.listSync();
-      final loadedTracks = <Track>[];
-      for (final file in files) {
-        if (file is File) {
-          final lowerPath = file.path.toLowerCase();
-          // 音声ファイルのみを対象にする
-          if (lowerPath.endsWith('.mp3') ||
-              lowerPath.endsWith('.m4a') ||
-              lowerPath.endsWith('.wav') ||
-              lowerPath.endsWith('.ogg') ||
-              lowerPath.endsWith('.aac')) {
-            loadedTracks.add(Track(
-              title: file.uri.pathSegments.last,
-              file: file,
-            ));
+    final loadedTracks = <Track>[];
+    for (final dir in dirsToScan) {
+      if (await dir.exists()) {
+        final files = dir.listSync();
+        for (final file in files) {
+          if (file is File) {
+            final lowerPath = file.path.toLowerCase();
+            if (lowerPath.endsWith('.mp3') ||
+                lowerPath.endsWith('.m4a') ||
+                lowerPath.endsWith('.wav') ||
+                lowerPath.endsWith('.ogg') ||
+                lowerPath.endsWith('.aac')) {
+              
+              if (!loadedTracks.any((t) => t.file.path == file.path)) {
+                loadedTracks.add(Track(
+                  title: file.uri.pathSegments.last,
+                  file: file,
+                ));
+              }
+            }
           }
         }
       }
-      setState(() {
-        _tracks.addAll(loadedTracks);
-      });
     }
+    
+    setState(() {
+      _tracks.clear();
+      _tracks.addAll(loadedTracks);
+    });
   }
 
   Future<void> _import() async {
@@ -84,7 +92,6 @@ class _PlayerPageState extends State<PlayerPage> {
       final src = File(f.path!);
       final dest = File('${mediaDir.path}/${f.name}');
       
-      // すでに同名ファイルが存在する場合はスキップ（重複防止）
       if (await dest.exists()) continue;
 
       await src.copy(dest.path);
