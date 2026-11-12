@@ -10,11 +10,27 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     ),
   );
 
-  // リアルタイムの再生位置をUIに伝えるためのストリーム
   Stream<Duration> get positionStream => _player.positionStream;
+  // 💡追加: シャッフルとリピートの状態をUIに伝えるストリーム
+  Stream<bool> get shuffleModeEnabledStream => _player.shuffleModeEnabledStream;
+  Stream<LoopMode> get loopModeStream => _player.loopModeStream;
 
   MyAudioHandler() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
+    
+    _player.durationStream.listen((duration) {
+      final currentItem = mediaItem.value;
+      if (currentItem != null && duration != null) {
+        mediaItem.add(currentItem.copyWith(duration: duration));
+      }
+    });
+
+    _player.currentIndexStream.listen((index) {
+      if (index != null && index < queue.value.length) {
+        mediaItem.add(queue.value[index]);
+      }
+    });
+
     _initSession();
   }
 
@@ -23,12 +39,10 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await session.configure(const AudioSessionConfiguration.music());
     await session.setActive(true);
 
-    // Bluetooth接続時の自動再生（デバイスタイプを文字列で判定）
     session.devicesChangedEventStream.listen((event) {
       final hasBluetoothAdded = event.devicesAdded.any(
         (d) => d.type.toString().toLowerCase().contains('bluetooth'),
       );
-
       if (hasBluetoothAdded) {
         if (_player.processingState == ProcessingState.ready ||
             _player.processingState == ProcessingState.completed) {
@@ -44,6 +58,7 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         MediaControl.skipToPrevious,
         if (_player.playing) MediaControl.pause else MediaControl.play,
         MediaControl.skipToNext,
+        MediaControl.stop,
       ],
       systemActions: const {MediaAction.seek},
       androidCompactActionIndices: const [0, 1, 2],
@@ -74,13 +89,11 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     await super.stop();
   }
 
-  // 車載・ヘッドセットからの曲送り/戻し
   @override
   Future<void> skipToNext() => _player.seekToNext();
   @override
   Future<void> skipToPrevious() => _player.seekToPrevious();
 
-  // シャッフル・リピート
   @override
   Future<void> setShuffleMode(AudioServiceShuffleMode shuffleMode) async {
     final enabled = shuffleMode == AudioServiceShuffleMode.all;
@@ -103,7 +116,6 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     }
   }
 
-  // プレイリストをセットして再生（曲送り・自動遷移用）
   Future<void> loadPlaylist(List<Track> tracks, int initialIndex) async {
     try {
       final session = await AudioSession.instance;
