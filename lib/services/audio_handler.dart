@@ -4,6 +4,7 @@ import 'package:audio_session/audio_session.dart';
 
 class MyAudioHandler extends BaseAudioHandler {
   final _player = AudioPlayer(
+    // iOSの通知センター制御との干渉を避けるため、オフロードは無効のまま
     androidAudioOffloadPreferences: const AndroidAudioOffloadPreferences(
       audioOffloadMode: AndroidAudioOffloadMode.disabled,
     ),
@@ -11,6 +12,15 @@ class MyAudioHandler extends BaseAudioHandler {
 
   MyAudioHandler() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
+    _initSession();
+  }
+
+  Future<void> _initSession() async {
+    final session = await AudioSession.instance;
+    // iOSでバックグラウンド再生を許可する設定
+    await session.configure(const AudioSessionConfiguration.music());
+    // セッションをアクティブにする
+    await session.setActive(true);
   }
 
   PlaybackState _transformEvent(PlaybackEvent event) {
@@ -51,24 +61,13 @@ class MyAudioHandler extends BaseAudioHandler {
 
   Future<void> loadFile(String path, String title) async {
     try {
-      // オーディオセッションを音楽向けに設定
+      // 再生前にセッションがアクティブであることを再確認
       final session = await AudioSession.instance;
-      await session.configure(const AudioSessionConfiguration.music());
+      await session.setActive(true);
 
-      // 1. 前の曲を確実に停止
       await _player.stop();
-      
-      // 2. 新しいファイルを読み込む
       final duration = await _player.setFilePath(path);
-      
-      // 3. 読み込み完了後に通知を更新
-      mediaItem.add(MediaItem(
-        id: path,
-        title: title,
-        duration: duration,
-      ));
-      
-      // 4. 再生
+      mediaItem.add(MediaItem(id: path, title: title, duration: duration));
       await _player.play();
     } catch (e) {
       print("Error loading file: $e");
