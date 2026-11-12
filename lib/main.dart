@@ -476,7 +476,7 @@ class _FullPlayerScreenState extends State<FullPlayerScreen> {
                   ),
                   const Spacer(flex: 1),
                   
-                  // 💡ここから位置情報をリアルタイム取得
+                  // リアルタイムに動くシークバーと時間表示
                   StreamBuilder<Duration>(
                     stream: audioHandler.positionStream,
                     builder: (context, snapshot) {
